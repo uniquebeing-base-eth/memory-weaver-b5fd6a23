@@ -92,8 +92,8 @@ export interface Quote {
 
 /** Onchain transaction hashes for a wallet-settled payment. */
 export interface OnchainPayments {
-  agentTxHash?: string;
-  feeTxHash?: string;
+  agentTxHash?: string | undefined;
+  feeTxHash?: string | undefined;
 }
 
 export interface GenerationResult {
