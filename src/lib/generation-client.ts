@@ -4,7 +4,7 @@
  */
 
 import type { GenerationError, GenerationResult, Quote } from "./agent/types";
-import { authorizePayments, WalletPaymentError } from "./pay.client";
+import { authorizePayments, payOnchain, WalletPaymentError } from "./pay.client";
 
 export type QuoteResponse = { ok: true; quote: Quote } | { ok: false; error: GenerationError };
 
@@ -97,8 +97,16 @@ async function pollUntilDone(taskId: string, timeoutMs = 180_000): Promise<Gener
 /** Pays (once) and generates. Retries reuse the same payment. */
 export async function payAndGenerate(quote: Quote): Promise<GenerationResult> {
   let payments: { agent?: unknown; fee?: unknown } | null = null;
+  let onchain: Record<string, string> | undefined;
   try {
-    payments = await authorizePayments(quote.requirements, `${location.origin}/api/memory/generate`);
+    if (quote.settlement === "onchain") {
+      onchain = (await payOnchain(quote.requirements)) as Record<string, string>;
+    } else if (quote.settlement === "x402") {
+      payments = await authorizePayments(
+        quote.requirements,
+        `${location.origin}/api/memory/generate`,
+      );
+    }
   } catch (error) {
     const code = error instanceof WalletPaymentError ? error.code : "payment_failed";
     return {
@@ -109,9 +117,11 @@ export async function payAndGenerate(quote: Quote): Promise<GenerationResult> {
       error: {
         code: code === "payment_rejected" ? "payment_rejected" : "payment_failed",
         message:
-          code === "payment_rejected"
-            ? "You cancelled the payment. Nothing was charged."
-            : "That payment didn't go through. Please try again.",
+          error instanceof WalletPaymentError && code !== "payment_rejected"
+            ? error.message
+            : code === "payment_rejected"
+              ? "You cancelled the payment. Nothing was charged."
+              : "That payment didn't go through. Please try again.",
         retryable: true,
       },
     };
@@ -120,6 +130,7 @@ export async function payAndGenerate(quote: Quote): Promise<GenerationResult> {
   const result = await postGenerate({
     quoteId: quote.quoteId,
     payments: payments ?? {},
+    ...(onchain ? { onchain } : {}),
   });
 
   if (result.status === "processing") return pollUntilDone(result.taskId);

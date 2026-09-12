@@ -6,7 +6,14 @@
  * from an injected EIP-1193 provider.
  */
 
-import type { PaymentRequirementLike } from "./agent/types";
+import type { OnchainPayments, PaymentRequirementLike } from "./agent/types";
+import {
+  chainIdFromNetwork,
+  connectWallet,
+  readWallet,
+  sendTokenTransfer,
+  WalletError,
+} from "./wallet.client";
 
 export type PaymentError = "payment_rejected" | "payment_failed" | "no_wallet";
 
@@ -103,4 +110,42 @@ export async function authorizePayments(
     }
     throw new WalletPaymentError("payment_failed", "That payment didn't go through.");
   }
+}
+
+/**
+ * Real onchain settlement: the user's wallet sends the agent's amount to the
+ * agent and the Dear Diary fee to the fee wallet, as two USDC transfers.
+ * The server then verifies both transactions against the chain.
+ */
+export async function payOnchain(requirements: PaymentRequirementLike[]): Promise<OnchainPayments> {
+  const wallet = (await readWallet()) ?? (await connectWallet());
+  const payments: OnchainPayments = {};
+
+  for (const requirement of requirements) {
+    if (!requirement.asset) {
+      throw new WalletPaymentError("payment_failed", "This payment isn't available right now.");
+    }
+    try {
+      const hash = await sendTokenTransfer({
+        provider: wallet.provider,
+        from: wallet.address,
+        token: requirement.asset,
+        to: requirement.payTo,
+        atomicAmount: requirement.maxAmountRequired,
+        chainId: chainIdFromNetwork(requirement.network),
+      });
+      if (requirement.kind === "agent") payments.agentTxHash = hash;
+      else payments.feeTxHash = hash;
+    } catch (error) {
+      if (error instanceof WalletError) {
+        throw new WalletPaymentError(
+          error.code === "rejected" ? "payment_rejected" : "payment_failed",
+          error.message,
+        );
+      }
+      throw new WalletPaymentError("payment_failed", "That payment didn't go through.");
+    }
+  }
+
+  return payments;
 }
