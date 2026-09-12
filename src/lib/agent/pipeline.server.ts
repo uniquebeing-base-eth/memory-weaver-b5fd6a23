@@ -17,13 +17,35 @@ import { isUsableImage, persistImage } from "./storage.server";
 import { createTask, getTask, updateTask, type GenerationTask } from "./tasks.server";
 import { fetchAgentPaymentRequirements, feeRequirement } from "./x402.server";
 import { settlePayment } from "./x402.server";
+import { verifyTokenPayment } from "./onchain.server";
 import type {
   GenerationError,
   GenerationResult,
+  OnchainPayments,
   PaymentBreakdown,
   PaymentRequirementLike,
   Quote,
+  SettlementMode,
 } from "./types";
+
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * A facilitator settles signed x402 authorizations. Without one, the user's own
+ * wallet pays onchain directly (still no custodial wallet, still no keys here).
+ * Mocks are only reachable outside production and only when no real recipient
+ * address is available to pay.
+ */
+function settlementMode(
+  requirements: PaymentRequirementLike[],
+  config: { facilitatorUrl?: string | undefined; isProduction: boolean },
+): SettlementMode {
+  if (config.facilitatorUrl) return "x402";
+  const payable = requirements.every((r) => ADDRESS.test(r.payTo) && Boolean(r.asset));
+  if (payable) return "onchain";
+  if (config.isProduction) return "x402";
+  return "mock";
+}
 
 export type QuoteOutcome = { ok: true; quote: Quote } | { ok: false; error: GenerationError };
 
@@ -100,13 +122,16 @@ export async function createQuote(memory: string): Promise<QuoteOutcome> {
   const agentRequirement = await fetchAgentPaymentRequirements(best, agentUsd);
   const requirements: PaymentRequirementLike[] = [agentRequirement, feeRequirement(feeUsd)];
 
+  const settlement = settlementMode(requirements, config);
+
   const task = createTask({
+    settlement,
     originalMemory: memory.trim(),
     interpretation: interpreted.interpretation,
     candidates,
     requirements,
     breakdown,
-    mock: useMockPayments(config),
+    mock: settlement === "mock" && useMockPayments(config),
   });
 
   return {
@@ -124,6 +149,7 @@ export async function createQuote(memory: string): Promise<QuoteOutcome> {
       fallbackAgentIds: candidates.slice(1, 4).map((a) => a.id),
       requirements,
       mock: task.mock,
+      settlement: task.settlement,
     },
   };
 }
@@ -148,11 +174,16 @@ function toResult(task: GenerationTask): GenerationResult {
 async function ensurePaid(
   task: GenerationTask,
   payments: { agent?: unknown; fee?: unknown },
+  onchain?: OnchainPayments,
 ): Promise<{ ok: true } | { ok: false; error: GenerationError }> {
   if (task.paymentReference && task.feeSettled) return { ok: true };
 
   const agentRequirement = task.requirements.find((r) => r.kind === "agent")!;
   const fee = task.requirements.find((r) => r.kind === "fee")!;
+
+  if (task.settlement === "onchain") {
+    return ensurePaidOnchain(task, agentRequirement, fee, onchain ?? {});
+  }
 
   if (!task.paymentReference) {
     const settled = await settlePayment(agentRequirement, payments.agent);
@@ -176,6 +207,62 @@ async function ensurePaid(
       return {
         ok: false,
         error: err("payment_failed", settled.error ?? "That payment didn't go through."),
+      };
+    }
+    updateTask(task.id, { feeSettled: true });
+    task.feeSettled = true;
+  }
+
+  return { ok: true };
+}
+
+/**
+ * Verifies the two onchain transfers the user's wallet already broadcast:
+ * the agent's amount to the agent, the Dear Diary fee to the fee wallet.
+ * Verified hashes are recorded so a retry never charges again.
+ */
+async function ensurePaidOnchain(
+  task: GenerationTask,
+  agentRequirement: PaymentRequirementLike,
+  fee: PaymentRequirementLike,
+  onchain: OnchainPayments,
+): Promise<{ ok: true } | { ok: false; error: GenerationError }> {
+  if (!task.paymentReference) {
+    if (!onchain.agentTxHash) {
+      return { ok: false, error: err("payment_failed", "Payment wasn't authorized.") };
+    }
+    const verified = await verifyTokenPayment({
+      hash: onchain.agentTxHash,
+      network: agentRequirement.network,
+      ...(agentRequirement.asset ? { token: agentRequirement.asset } : {}),
+      payTo: agentRequirement.payTo,
+      atomicAmount: agentRequirement.maxAmountRequired,
+    });
+    if (!verified.ok) {
+      return {
+        ok: false,
+        error: err("payment_failed", verified.error ?? "That payment didn't go through."),
+      };
+    }
+    updateTask(task.id, { paymentReference: verified.reference });
+    task.paymentReference = verified.reference;
+  }
+
+  if (!task.feeSettled) {
+    if (!onchain.feeTxHash) {
+      return { ok: false, error: err("payment_failed", "Payment wasn't completed.") };
+    }
+    const verified = await verifyTokenPayment({
+      hash: onchain.feeTxHash,
+      network: fee.network,
+      ...(fee.asset ? { token: fee.asset } : {}),
+      payTo: fee.payTo,
+      atomicAmount: fee.maxAmountRequired,
+    });
+    if (!verified.ok) {
+      return {
+        ok: false,
+        error: err("payment_failed", verified.error ?? "That payment didn't go through."),
       };
     }
     updateTask(task.id, { feeSettled: true });
@@ -244,12 +331,13 @@ async function attemptAgents(task: GenerationTask): Promise<GenerationResult> {
 export async function runGeneration(
   taskId: string,
   payments: { agent?: unknown; fee?: unknown },
+  onchain?: OnchainPayments,
 ): Promise<GenerationResult | null> {
   const task = getTask(taskId);
   if (!task) return null;
   if (task.status === "completed") return toResult(task);
 
-  const paid = await ensurePaid(task, payments);
+  const paid = await ensurePaid(task, payments, onchain);
   if (!paid.ok) {
     const updated = updateTask(task.id, { status: "failed", error: paid.error })!;
     return toResult(updated);

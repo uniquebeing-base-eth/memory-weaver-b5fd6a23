@@ -12,6 +12,12 @@ const Body = z.object({
       fee: z.unknown().optional(),
     })
     .optional(),
+  onchain: z
+    .object({
+      agentTxHash: z.string().optional(),
+      feeTxHash: z.string().optional(),
+    })
+    .optional(),
 });
 
 export const Route = createFileRoute("/api/memory/generate")({
@@ -23,10 +29,10 @@ export const Route = createFileRoute("/api/memory/generate")({
           return Response.json({ error: { code: "generation_failed", message: "Bad request", retryable: false } }, { status: 400 });
         }
 
-        const { quoteId, retry, payments } = parsed.data;
+        const { quoteId, retry, payments, onchain } = parsed.data;
         const result = retry
           ? await retryGeneration(quoteId)
-          : await runGeneration(quoteId, payments ?? {});
+          : await runGeneration(quoteId, payments ?? {}, onchain);
 
         if (!result) {
           return Response.json(
