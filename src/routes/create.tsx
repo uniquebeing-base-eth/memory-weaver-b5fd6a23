@@ -6,6 +6,7 @@ import { addMemory, CURRENT_USER, MOOD_LABEL } from "@/lib/diary-store";
 import type { Mood } from "@/lib/protocol";
 import { countWords, MIN_MEMORY_WORDS, type GenerationError, type Quote } from "@/lib/agent/types";
 import { payAndGenerate, requestQuote, retryGeneration } from "@/lib/generation-client";
+import { WalletChip } from "@/components/WalletChip";
 import mascot from "@/assets/mascot.png";
 
 export const Route = createFileRoute("/create")({
@@ -265,9 +266,14 @@ function CreateMemory() {
               <span>${quote.breakdown.totalUsd.toFixed(2)}</span>
             </div>
             <p className="mt-3 text-xs text-muted-foreground">
-              Paid instantly from your wallet. We pick the best artist for your memory
+              Paid instantly from your wallet in USDC. We pick the best artist for your memory
               automatically.
             </p>
+            {quote.settlement !== "mock" && (
+              <div className="mt-4 border-t border-border pt-4">
+                <WalletChip hint="Connect your wallet to pay and create this memory." />
+              </div>
+            )}
           </div>
         </section>
       )}

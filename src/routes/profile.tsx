@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { ChevronRight, Wallet, Bell, Palette, ShieldCheck } from "lucide-react";
 import { Screen } from "@/components/Screen";
 import { CURRENT_USER, useMemories } from "@/lib/diary-store";
+import { useWallet } from "@/hooks/useWallet";
 import mascot from "@/assets/mascot.png";
 
 export const Route = createFileRoute("/profile")({
@@ -26,6 +27,7 @@ const rows = [
 ];
 
 function Profile() {
+  const wallet = useWallet();
   const mine = useMemories().filter((m) => m.author.handle === CURRENT_USER.handle);
   const hearts = mine.reduce((s, m) => s + m.hearts, 0);
   const minted = mine.filter((m) => m.status === "minted" || m.status === "listed").length;
@@ -68,6 +70,33 @@ function Profile() {
       </section>
 
       <section className="mt-6 px-6">
+        <div className="surface-card flex items-center gap-3 p-5">
+          <span className="grid h-9 w-9 place-items-center rounded-full bg-secondary">
+            <Wallet className="h-4 w-4" />
+          </span>
+          <div className="flex-1">
+            <p className="text-sm font-bold">Wallet</p>
+            <p className="text-xs font-semibold text-muted-foreground">
+              {wallet.address
+                ? wallet.label
+                : wallet.available
+                  ? "Connect to pay for memories"
+                  : "Open in Farcaster or a wallet browser"}
+            </p>
+          </div>
+          {!wallet.address && wallet.available && (
+            <button
+              onClick={() => void wallet.connect()}
+              disabled={wallet.connecting}
+              className="press rounded-full bg-primary px-4 py-2 text-xs font-bold text-primary-foreground disabled:opacity-60"
+            >
+              {wallet.connecting ? "…" : "Connect"}
+            </button>
+          )}
+        </div>
+      </section>
+
+      <section className="mt-4 px-6">
         <div className="surface-card divide-y divide-border overflow-hidden">
           {rows.map(({ icon: Icon, label, value }) => (
             <div key={label} className="flex items-center gap-3 px-5 py-4">
