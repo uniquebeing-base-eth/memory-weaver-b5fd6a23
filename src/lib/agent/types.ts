@@ -75,6 +75,9 @@ export interface PaymentRequirementLike {
   raw?: Record<string, unknown>;
 }
 
+/** How the payment is settled behind the scenes. */
+export type SettlementMode = "x402" | "onchain" | "mock";
+
 export interface Quote {
   quoteId: string;
   breakdown: PaymentBreakdown;
@@ -84,6 +87,13 @@ export interface Quote {
   requirements: PaymentRequirementLike[];
   /** True when running with mock adapters (local development). */
   mock: boolean;
+  settlement: SettlementMode;
+}
+
+/** Onchain transaction hashes for a wallet-settled payment. */
+export interface OnchainPayments {
+  agentTxHash?: string;
+  feeTxHash?: string;
 }
 
 export interface GenerationResult {

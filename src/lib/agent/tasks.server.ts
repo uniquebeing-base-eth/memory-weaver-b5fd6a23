@@ -7,6 +7,7 @@
 import type { NormalizedAgent } from "./discovery.server";
 import type {
   GenerationError,
+  SettlementMode,
   GenerationStatus,
   PaymentBreakdown,
   PaymentRequirementLike,
@@ -33,6 +34,7 @@ export interface GenerationTask {
   pollUrl?: string;
   error?: GenerationError;
   mock: boolean;
+  settlement: SettlementMode;
 }
 
 const TASK_TTL_MS = 30 * 60 * 1000;
